@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; print(sys.executable)\")",
+      "Bash(conda env list)",
+      "Bash(where python)",
+      "Bash(pip install jax jaxlib)",
+      "Bash(python -c \"import jax; print(f''JAX version: {jax.__version__}'')\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

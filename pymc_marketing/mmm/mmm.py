@@ -19,6 +19,42 @@ import warnings
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
+
+# Singleton Logger Implementation
+# This ensures the logger is instantiated only once throughout the application
+# preventing duplicate log messages when handlers accumulate
+# Reference: https://stackoverflow.com/questions/7173033/duplicate-log-output-when-using-python-logging-module
+class _SingletonMMMLogger:
+    """Singleton logger for MMM to prevent duplicate log messages."""
+
+    _instance = None
+
+    @staticmethod
+    def get_logger():
+        """Get or create the singleton logger instance.
+
+        Returns the same logger instance on every call, ensuring handlers
+        are only added once and preventing duplicate log messages.
+
+        This implementation uses the complete Singleton pattern from the blog article
+        with its own handler and propagate=False to completely prevent duplicates.
+        """
+        if _SingletonMMMLogger._instance is None:
+            logger = logging.getLogger('pymc_marketing.mmm.mmm.MMM')
+            logger.setLevel(logging.DEBUG)
+            # Add StreamHandler with formatter (outputs to console)
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            # Disable propagation to prevent duplicate messages from root logger
+            logger.propagate = False
+            _SingletonMMMLogger._instance = logger
+        return _SingletonMMMLogger._instance
+
 import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
@@ -180,6 +216,22 @@ class BaseMMM(BaseValidateMMM):
             Scaling configuration for the model. If None, defaults to max scaling for both target and channels.
             Can be a Scaling object or a dict that will be converted to a Scaling object.
         """
+        # Use singleton logger to prevent duplicate log messages
+        # Each instance gets the same logger object, configured only once
+        self.logger = _SingletonMMMLogger.get_logger()
+        
+        # Log initialization with input parameters
+        self.logger.info("Initializing BaseMMM model")
+        self.logger.info(f"Input parameters - date_column: {date_column}")
+        self.logger.info(f"Input parameters - channel_columns: {channel_columns}")
+        self.logger.info(f"Input parameters - adstock: {type(adstock).__name__}")
+        self.logger.info(f"Input parameters - saturation: {type(saturation).__name__}")
+        self.logger.info(f"Input parameters - time_varying_intercept: {time_varying_intercept}")
+        self.logger.info(f"Input parameters - time_varying_media: {time_varying_media}")
+        self.logger.info(f"Input parameters - control_columns: {control_columns}")
+        self.logger.info(f"Input parameters - yearly_seasonality: {yearly_seasonality}")
+        self.logger.info(f"Input parameters - validate_data: {validate_data}")
+        
         self.control_columns = control_columns
         self.time_varying_intercept = time_varying_intercept
         self.time_varying_media = time_varying_media
@@ -263,6 +315,12 @@ class BaseMMM(BaseValidateMMM):
                 variable_name="gamma_fourier",
             )
 
+        # Log successful initialization
+        self.logger.info("BaseMMM model initialization completed successfully")
+        self.logger.info(f"Final configuration - scaling: {self.scaling}")
+        self.logger.info(f"Final configuration - model_config keys: {list(self.model_config.keys()) if self.model_config else 'None'}")
+        self.logger.info(f"Final configuration - yearly_fourier: {'Enabled' if self.yearly_seasonality else 'Disabled'}")
+
     def post_sample_model_transformation(self) -> None:
         """Post-sample model transformation in order to store the HSGP state from fit."""
         names = []
@@ -335,6 +393,19 @@ class BaseMMM(BaseValidateMMM):
             The time resolution of the date index. Used by TVP.
 
         """
+        self.logger.info("Starting data preprocessing")
+        self.logger.info(f"Input data shapes - X: {X.shape}, y: {y.shape if hasattr(y, 'shape') else len(y)}")
+        
+        # Log basic statistics about input data
+        if isinstance(X, pd.DataFrame):
+            self.logger.info(f"X columns: {list(X.columns)}")
+            self.logger.info(f"X date range: {X[self.date_column].min()} to {X[self.date_column].max()}")
+        
+        if hasattr(y, 'describe'):
+            y_stats = y.describe()
+            self.logger.info(f"y statistics - mean: {y_stats['mean']:.2f}, std: {y_stats['std']:.2f}, min: {y_stats['min']:.2f}, max: {y_stats['max']:.2f}")
+        else:
+            self.logger.info(f"y statistics - mean: {np.mean(y):.2f}, std: {np.std(y):.2f}, min: {np.min(y):.2f}, max: {np.max(y):.2f}")
         try:
             date_data = pd.to_datetime(X[self.date_column])
         except Exception as e:
@@ -393,6 +464,13 @@ class BaseMMM(BaseValidateMMM):
             self._time_resolution = (
                 self.X[self.date_column].iloc[1] - self.X[self.date_column].iloc[0]
             ).days
+
+        # Log completion of preprocessing
+        self.logger.info("Data preprocessing completed successfully")
+        self.logger.info(f"Final preprocessed data shapes - X: {self.X.shape}, y: {len(self.y)}")
+        self.logger.info(f"Model coordinates: {list(self.model_coords.keys())}")
+        if hasattr(self, '_time_index'):
+            self.logger.info(f"Time-varying features enabled - time_index length: {len(self._time_index)}")
 
     def _compute_scales(self) -> None:
         """Compute and save scaling factors for channels and target."""
@@ -570,6 +648,9 @@ class BaseMMM(BaseValidateMMM):
             )
 
         """
+        self.logger.info("Starting PyMC model building")
+        self.logger.info(f"Model building input data shapes - X: {X.shape}, y: {y.shape if hasattr(y, 'shape') else len(y)}")
+        
         self._generate_and_preprocess_model_data(X, y)
         # Compute and save scales
         self._compute_scales()
@@ -790,6 +871,13 @@ class BaseMMM(BaseValidateMMM):
                 var=(mu * target_scale_),
                 dims="date",
             )
+
+        # Log model building completion
+        self.logger.info("PyMC model building completed successfully")
+        self.logger.info(f"Model variables created: {[var.name for var in self.model.unobserved_RVs]}")
+        self.logger.info(f"Model deterministics: {[var.name for var in self.model.deterministics]}")
+        self.logger.info(f"Model coordinates: {list(self.model.coords.keys())}")
+        self.logger.info(f"Scaling factors applied - channel_scale shape: {self.channel_scale.shape}, target_scale: {self.target_scale}")
 
     @property
     def default_model_config(self) -> dict:
@@ -1122,6 +1210,107 @@ class BaseMMM(BaseValidateMMM):
             return d
 
         return format_nested_dict(model_config.copy())
+
+    def sample_prior_predictive(
+        self,
+        X=None,
+        y=None,
+        samples: int | None = None,
+        extend_idata: bool = True,
+        combined: bool = True,
+        **kwargs,
+    ):
+        """Sample from the model's prior predictive distribution.
+
+        Parameters
+        ----------
+        X : array, shape (n_pred, n_features)
+            The input data used for prediction using prior distribution.
+        y : array, shape (n_pred,), optional
+            The target values (real numbers) used for prediction using prior distribution.
+            If not set, defaults to an array of zeros.
+        samples : int
+            Number of samples from the prior parameter distributions to generate.
+            If not set, uses sampler_config['draws'] if that is available, otherwise defaults to 500.
+        extend_idata : Boolean
+            Determine whether the predictions should be added to inference data object.
+            Defaults to True.
+        combined: Boolean
+            Combine chain and draw dims into sample. Won't work if a dim named sample already exists.
+            Defaults to True.
+        **kwargs: Additional arguments to pass to pymc.sample_prior_predictive
+
+        Returns
+        -------
+        prior_predictive_samples : DataArray, shape (n_pred, samples)
+            Prior predictive samples for each input X
+
+        """
+        self.logger.info("Starting prior predictive sampling")
+        self.logger.info(f"Input parameters - X shape: {X.shape if X is not None else 'None'}")
+        self.logger.info(f"Input parameters - y shape: {y.shape if y is not None else 'None'}")
+        self.logger.info(f"Input parameters - samples: {samples}, extend_idata: {extend_idata}, combined: {combined}")
+        
+        # Call the parent method
+        result = super().sample_prior_predictive(
+            X=X, y=y, samples=samples, extend_idata=extend_idata, combined=combined, **kwargs
+        )
+        
+        # Log completion
+        self.logger.info("Prior predictive sampling completed successfully")
+        self.logger.info(f"Output samples shape: {result.sizes}")
+        self.logger.info(f"Output variables: {list(result.data_vars.keys())}")
+        
+        return result
+
+    def fit(  # type: ignore[override]
+        self,
+        X: pd.DataFrame | pd.Series,
+        y: pd.Series | np.ndarray | None = None,
+        progressbar: bool | None = None,
+        random_seed=None,
+        **kwargs: Any,
+    ) -> az.InferenceData:
+        """Fit a model using the data passed as a parameter.
+
+        Sets attrs to inference data of the model.
+
+        Parameters
+        ----------
+        X : pd.DataFrame | pd.Series
+            The training input samples.
+        y : pd.Series | np.ndarray | None
+            The target values (real numbers).
+        progressbar : bool, optional
+            Specifies whether the fit progress bar should be displayed. Defaults to True.
+        random_seed : Optional
+            Provides sampler with initial random seed for obtaining reproducible samples.
+        **kwargs : Any
+            Custom sampler settings can be provided in form of keyword arguments.
+
+        Returns
+        -------
+        self : az.InferenceData
+            Returns inference data of the fitted model.
+
+        """
+        self.logger.info("Starting model fitting")
+        self.logger.info(f"Fit input data shapes - X: {X.shape}, y: {y.shape if hasattr(y, 'shape') else len(y) if y is not None else 'None'}")
+        self.logger.info(f"Fit parameters - progressbar: {progressbar}, random_seed: {random_seed}")
+        self.logger.info(f"Additional kwargs: {list(kwargs.keys())}")
+        
+        # Call the parent method
+        result = super().fit(
+            X=X, y=y, progressbar=progressbar, random_seed=random_seed, **kwargs
+        )
+        
+        # Log completion
+        self.logger.info("Model fitting completed successfully")
+        self.logger.info(f"Inference data groups: {list(result.groups())}")
+        if hasattr(result, 'posterior'):
+            self.logger.info(f"Posterior variables: {list(result.posterior.data_vars.keys())}")
+        
+        return result
 
 
 class MMM(
@@ -2211,6 +2400,11 @@ class MMM(
             Posterior predictive samples for each input X
 
         """
+        self.logger.info("Starting posterior predictive sampling")
+        self.logger.info(f"Input parameters - X shape: {X.shape if X is not None else 'None'}")
+        self.logger.info(f"Input parameters - extend_idata: {extend_idata}, combined: {combined}")
+        self.logger.info(f"Input parameters - include_last_observations: {include_last_observations}, original_scale: {original_scale}")
+        
         X = _handle_deprecate_pred_argument(X, "X", sample_posterior_predictive_kwargs)
         if include_last_observations:
             X = pd.concat(
@@ -2287,6 +2481,15 @@ class MMM(
                     posterior_predictive_samples["intercept"] = (
                         posterior_predictive_samples["intercept"].isel(date=0)
                     )
+
+        # Log completion of posterior predictive sampling
+        self.logger.info("Posterior predictive sampling completed successfully")
+        self.logger.info(f"Output samples shape: {posterior_predictive_samples.sizes}")
+        self.logger.info(f"Output variables: {list(posterior_predictive_samples.data_vars.keys())}")
+        if original_scale:
+            self.logger.info("Samples returned in original scale")
+        else:
+            self.logger.info("Samples returned in scaled format")
 
         return posterior_predictive_samples
 
